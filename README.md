@@ -1,3 +1,5 @@
+<img width="762" height="471" alt="Screenshot 2026-09-26 at 11 08 23 AM" src="https://github.com/user-attachments/assets/a4ad600c-626b-476b-9fd8-838dad8558eb" />
+
 # SentinelOps
 
 SentinelOps is an AI-powered Security Operations platform built to detect, analyze, and respond to threats in real time. It ingests raw security events from tools such as CrowdStrike, Wazuh, and Suricata, moves them through a Kafka streaming pipeline, runs deep AI reasoning on each threat using the kimi-k3 model via NVIDIA NIM, and then automatically executes remediation playbooks — all without human intervention.
