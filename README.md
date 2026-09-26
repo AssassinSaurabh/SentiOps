@@ -1,163 +1,104 @@
-<img width="762" height="471" alt="Screenshot 2026-09-26 at 11 08 23 AM" src="https://github.com/user-attachments/assets/63e19719-3729-427b-955c-d2f1a5528e71" />
+# SentinelOps
 
-# 🛡️ SentinelOps :  AI-Powered Security Operations Platform
+SentinelOps is an AI-powered Security Operations platform built to detect, analyze, and respond to threats in real time. It ingests raw security events from tools such as CrowdStrike, Wazuh, and Suricata, moves them through a Kafka streaming pipeline, runs deep AI reasoning on each threat using the kimi-k3 model via NVIDIA NIM, and then automatically executes remediation playbooks — all without human intervention.
 
-<div align="center">
-
-![SentinelOps](https://img.shields.io/badge/SentinelOps-v1.0-blue?style=for-the-badge&logo=shield)
-![Python](https://img.shields.io/badge/Python-3.11-green?style=for-the-badge&logo=python)
-![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker)
-![Kafka](https://img.shields.io/badge/Apache-Kafka-231F20?style=for-the-badge&logo=apachekafka)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?style=for-the-badge&logo=postgresql)
-![AI](https://img.shields.io/badge/AI-kimi--k3%20%7C%20NVIDIA%20NIM-76B900?style=for-the-badge&logo=nvidia)
-
-**A production-grade Security Operations Center (SOC) platform powered by AI threat analysis, real-time event streaming, and automated remediation.**
-
-[Architecture](#-architecture) • [Quick Start](#-quick-start) • [Features](#-features) • [Phases](#-project-phases) • [API](#-api-reference) • [Tests](#-running-tests)
-
-</div>
+The project is organized into six phases, each building on the last. Every phase ships with an automated test suite that must pass completely before the next phase begins.
 
 ---
 
-## 🌟 What is SentinelOps?
-
-SentinelOps is a full-stack **AI Security Operations Platform** that ingests security events from tools like CrowdStrike, Wazuh, and Suricata, processes them through a real-time Kafka streaming pipeline, uses a **deep reasoning AI model (kimi-k3)** to classify threats, and automatically remediates confirmed attacks — all within seconds.
-
-### Key Capabilities
-
-| Capability | Details |
-|---|---|
-| 🔄 **Real-time streaming** | Apache Kafka with 9 topics, KRaft mode (no Zookeeper) |
-| 🧠 **AI threat analysis** | `moonshotai/kimi-k3` via NVIDIA NIM — deep reasoning |
-| 🛡️ **Auto-remediation** | 5 playbooks: BLOCK_IP, ESCALATE, AUTO_REMEDIATE, INVESTIGATE, IGNORE |
-| 📊 **Vector search** | PostgreSQL + pgvector for semantic similarity on findings |
-| 🔔 **Notifications** | Console alerts + Slack webhook + PostgreSQL history |
-| 🐳 **Fully containerized** | 12 Docker services, one `docker compose up -d` |
-
----
-
-## 🏗️ Architecture
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        SentinelOps Platform                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  [CrowdStrike] [Wazuh] [Suricata]                               │
-│         │                                                       │
-│         ▼                                                       │
-│   [Nginx :8080] ──► [FastAPI :8000]                             │
-│                           │                                     │
-│                ┌──────────▼──────────┐                          │
-│                │   Apache Kafka      │  9 Topics, KRaft Mode    │
-│                │   security.events.* │                          │
-│                └──┬──────┬──────┬───┘                          │
-│                   │      │      │                               │
-│            ┌──────▼─┐ ┌──▼───┐ ┌▼────────┐                    │
-│            │Normaliz│ │Enrich│ │ Storage │                     │
-│            │  er    │ │  er  │ │ Worker  │──► PostgreSQL       │
-│            └────────┘ └──────┘ └─────────┘    (pgvector)      │
-│                                    │                            │
-│                          ┌─────────▼──────────┐                │
-│                          │    AI Worker        │                │
-│                          │  moonshotai/kimi-k3 │◄── NVIDIA NIM  │
-│                          │  ~70s deep reasoning│                │
-│                          └─────────┬──────────┘                │
-│                                    │                            │
-│                       ai.analysis.results (Kafka)               │
-│                                    │                            │
-│                     ┌──────────────▼──────────────┐            │
-│                     │    Remediation Worker        │            │
-│                     │  BLOCK_IP / ESCALATE /       │            │
-│                     │  AUTO_REMEDIATE / INVESTIGATE│            │
-│                     └──────────────┬──────────────┘            │
-│                                    │                            │
-│                       notifications.outbound (Kafka)            │
-│                                    │                            │
-│                     ┌──────────────▼──────────────┐            │
-│                     │   Notification Worker        │            │
-│                     │  Console + Slack + DB        │            │
-│                     └─────────────────────────────┘            │
-│                                                                 │
-│  [Redis :6380]  — Event deduplication                           │
-│  [Kafka UI :8090] — Browse topics & messages                    │
-└─────────────────────────────────────────────────────────────────┘
+External Security Tools (CrowdStrike, Wazuh, Suricata)
+              |
+              v
+      [Nginx :8080]  →  [FastAPI :8000]
+              |
+              v
+     security.events.raw   (Kafka)
+              |
+              v
+     [Normalizer Worker]
+       parse + fingerprint + Redis dedup
+              |
+              v
+     security.events.normalized   (Kafka)
+              |
+              v
+     [Enrichment Worker]
+       IP reputation + geolocation + asset criticality
+              |
+              v
+     security.events.enriched   (Kafka)
+              |
+              v
+     [Storage Worker]  →  PostgreSQL (pgvector)
+              |
+              v
+     security.findings.stored   (Kafka)
+              |
+              v
+     [AI Worker]
+       moonshotai/kimi-k3 via NVIDIA NIM
+       ~70 seconds deep reasoning
+       verdict · risk_score · action · mitre_techniques
+              |
+              v
+     ai.analysis.results   (Kafka)
+              |
+              v
+     [Remediation Worker]
+       BLOCK_IP · ESCALATE · AUTO_REMEDIATE · INVESTIGATE · IGNORE
+       findings.remediated = true  →  PostgreSQL
+              |
+              v
+     notifications.outbound   (Kafka)
+              |
+              v
+     [Notification Worker]
+       Console alert · Slack webhook · notifications table
 ```
 
 ---
 
-## ✨ Features
-
-### Phase 2 — Foundation
-- **FastAPI** REST backend with async PostgreSQL via `asyncpg`
-- **PostgreSQL 15 + pgvector** for findings storage and semantic similarity search
-- **Redis** for sub-millisecond event deduplication (10-min TTL)
-- **Nginx** reverse proxy with rate limiting
-
-### Phase 3 — Kafka Event Streaming
-- **Apache Kafka** (KRaft mode, no Zookeeper) running on ARM64/Apple Silicon
-- 9 Kafka topics: `security.events.raw`, `security.events.normalized`, `security.events.enriched`, `security.findings.stored`, `ai.analysis.results`, `ai.high.priority`, `remediation.tasks`, `notifications.outbound`, `dlq.failed.events`
-- **Normalizer Worker** — parses multi-source events (CrowdStrike, Wazuh, Suricata, SentinelOne), computes SHA-256 fingerprint, deduplicates via Redis
-- **Enrichment Worker** — IP reputation lookup, geolocation, asset criticality scoring
-- **Storage Worker** — persists enriched findings to PostgreSQL with vector embeddings
-
-### Phase 4 — AI Analysis Engine
-- **AI Worker** powered by `moonshotai/kimi-k3` via NVIDIA NIM
-- Deep reasoning model — ~70s per analysis, extremely high accuracy
-- Outputs: `verdict`, `risk_score` (0-100), `confidence`, `action`, `mitre_techniques`, `summary`, `reasoning`
-- Handles `reasoning_content` fallback for reasoning model response format
-- Safe retry logic + JSON extraction from mixed reasoning/content responses
-
-### Phase 5 — Auto-Remediation
-| Playbook | Trigger | Action |
-|---|---|---|
-| `BLOCK_IP` | risk ≥ 60, TRUE_POSITIVE | Firewall block (iptables / cloud WAF) |
-| `ESCALATE` | HIGH severity | Create P1 ticket (PagerDuty/Jira) |
-| `AUTO_REMEDIATE` | risk ≥ 70 | Block + rotate credentials + ticket |
-| `INVESTIGATE` | NEEDS_INVESTIGATION | Queue for analyst review |
-| `IGNORE` | FALSE_POSITIVE | Safely dismiss |
-
-### Phase 6 — Notifications
-- **Console alerts** — beautifully formatted, always on
-- **Slack webhook** — HIGH/CRITICAL events (set `SLACK_WEBHOOK_URL`)
-- **PostgreSQL history** — full `notifications` table with audit trail
-
----
-
-## 🚀 Quick Start
+## Getting Started
 
 ### Prerequisites
-- Docker Desktop (4GB+ RAM)
-- Docker Compose v2
-- NVIDIA NIM API key ([get free at build.nvidia.com](https://build.nvidia.com))
 
-### 1. Clone & Configure
+Before you begin, make sure you have Docker Desktop running with at least 4 GB of memory allocated. You will also need a free NVIDIA NIM API key from [build.nvidia.com](https://build.nvidia.com) to power the AI analysis engine.
+
+### Installation
+
+Clone the repository and enter the project directory.
 
 ```bash
 git clone git@github.com:AssassinSaurabh/SentiOps.git
 cd SentiOps/sentinelops
 ```
 
-Edit `.env` and add your NVIDIA NIM API key:
-```env
+Open the `.env` file and add your NVIDIA NIM API key.
+
+```
 NVIDIA_API_KEY=nvapi-your-key-here
 NVIDIA_MODEL=moonshotai/kimi-k3
 AI_TIMEOUT_SECONDS=120
 ```
 
-### 2. Start All 12 Services
+Start all twelve services with a single command.
 
 ```bash
 docker compose up -d
 ```
 
-Wait ~30s for Kafka to initialize, then verify:
+Give Kafka about thirty seconds to finish its initialization, then verify that all containers are healthy.
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Status}}'
 ```
 
-### 3. Inject Your First Security Event
+### Sending Your First Event
+
+Once the platform is running, inject a simulated brute force attack and watch the pipeline respond.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/events/simulate \
@@ -175,194 +116,183 @@ curl -X POST http://localhost:8080/api/v1/events/simulate \
   }'
 ```
 
-### 4. Watch the Pipeline in Real Time
+After approximately ninety seconds, the notification worker will print a formatted security alert to its console log.
 
 ```bash
-# Watch AI analysis
-docker logs -f sentinelops-ai-worker
-
-# Watch remediation
-docker logs -f sentinelops-remediation-worker
-
-# Watch notifications
-docker logs -f sentinelops-notification-worker
+docker logs sentinelops-notification-worker --tail 20
 ```
 
-After ~90 seconds you'll see:
+You should see output similar to the following.
+
 ```
-🔴 SENTINELOPS SECURITY ALERT [HIGH]
+============================================================
+SENTINELOPS SECURITY ALERT [HIGH]
 ============================================================
   Verdict:     TRUE_POSITIVE
   Risk Score:  95/100
   Source IP:   185.220.101.45
-  Summary:     SSH brute force from known Tor exit node...
-  Action:      🛡️  BLOCKED IP
+  Summary:     SSH brute force from known Tor exit node targeting
+               root account on critical production database.
+  Action:      BLOCKED IP
+  Time:        2026-09-26 05:18:53 UTC
 ============================================================
 ```
 
-### 5. Query Results
+---
 
-```bash
-# AI verdicts in PostgreSQL
-docker exec sentinelops-postgres psql -U sentinelops -d sentinelops -c \
-  "SELECT title, ai_verdict, ai_risk_score, ai_action, remediated
-   FROM findings ORDER BY created_at DESC LIMIT 5;"
+## Services
 
-# Notification history
-docker exec sentinelops-postgres psql -U sentinelops -d sentinelops -c \
-  "SELECT severity, verdict, action_taken, source_ip
-   FROM notifications ORDER BY sent_at DESC LIMIT 5;"
-```
+The platform runs twelve containers. Each one has a single responsibility.
+
+| Container | Port | Responsibility |
+|---|---|---|
+| sentinelops-postgres | 5433 | Persistent storage with pgvector extension |
+| sentinelops-redis | 6380 | Event deduplication with ten-minute TTL |
+| sentinelops-kafka | 9092 | Event streaming backbone in KRaft mode |
+| sentinelops-kafka-ui | 8090 | Visual browser for Kafka topics |
+| sentinelops-backend | 8000 | FastAPI REST application |
+| sentinelops-nginx | 8080 | Reverse proxy and API gateway |
+| sentinelops-normalizer | — | Parses and deduplicates raw events |
+| sentinelops-enrichment | — | Adds IP reputation and asset intelligence |
+| sentinelops-storage | — | Writes enriched findings to PostgreSQL |
+| sentinelops-ai-worker | — | Calls kimi-k3 to classify each threat |
+| sentinelops-remediation-worker | — | Executes remediation playbooks |
+| sentinelops-notification-worker | — | Sends alerts and stores notification history |
 
 ---
 
-## 🗂️ Project Structure
+## Project Phases
 
-```
-sentinelops/
-├── docker-compose.yml          # 12 services
-├── .env                        # Configuration
-├── nginx/
-│   └── nginx.conf              # Reverse proxy config
-├── backend/
-│   ├── main.py                 # FastAPI application
-│   ├── models.py               # SQLAlchemy models
-│   └── requirements.txt
-├── workers/
-│   ├── Dockerfile              # Shared Dockerfile for all workers
-│   ├── requirements.txt        # Shared Python dependencies
-│   ├── common/
-│   │   ├── kafka_client.py     # Kafka producer/consumer factory
-│   │   └── models.py           # Shared Pydantic models
-│   ├── normalizer/
-│   │   └── main.py             # Event parsing + deduplication
-│   ├── enrichment/
-│   │   └── main.py             # IP reputation + asset lookup
-│   ├── storage/
-│   │   └── main.py             # PostgreSQL persistence
-│   ├── ai_worker/
-│   │   └── main.py             # kimi-k3 AI threat analysis
-│   ├── remediation_worker/
-│   │   └── main.py             # Playbook execution
-│   └── notification_worker/
-│       └── main.py             # Alerts + Slack + DB
-└── scripts/
-    ├── test_phase3_pipeline.sh # 23 pipeline tests
-    ├── test_phase4_ai.sh       # 10 AI engine tests
-    ├── test_phase5_remediation.sh # 10 remediation tests
-    └── test_phase6_notifications.sh # 8 notification tests
-```
+### Phase 1: Architecture and Planning
+
+The initial phase establishes the full system design, data models, Kafka topic layout, and service boundaries before a single line of implementation code is written.
+
+### Phase 2: Foundation
+
+This phase brings up the core infrastructure: FastAPI with async PostgreSQL access via asyncpg, pgvector for semantic similarity search on findings, Redis for deduplication, and Nginx as the front door.
+
+### Phase 3: Kafka Event Streaming
+
+Phase 3 introduces the full streaming pipeline across nine Kafka topics. The normalizer worker parses events from multiple source formats, computes a SHA-256 fingerprint for each one, and checks Redis before allowing it downstream. The enrichment worker adds IP reputation, geolocation, and asset criticality scores. The storage worker persists the finished finding to PostgreSQL.
+
+### Phase 4: AI Analysis Engine
+
+The AI worker reads from the `security.findings.stored` topic and calls NVIDIA NIM to run each event through the kimi-k3 reasoning model. The model takes roughly seventy seconds to reason through the threat context and returns a structured verdict including `TRUE_POSITIVE`, `FALSE_POSITIVE`, or `NEEDS_INVESTIGATION`, a risk score from 0 to 100, a confidence value, recommended MITRE ATT&CK techniques, and a plain-language summary. All fields are written back to the PostgreSQL `findings` table.
+
+### Phase 5: Auto-Remediation
+
+The remediation worker reads from `ai.analysis.results` and routes each event to one of five playbooks based on the AI decision and a configurable risk score threshold.
+
+| Action | Minimum Risk Score | What Happens |
+|---|---|---|
+| BLOCK_IP | 60 | IP is blocked at the firewall |
+| ESCALATE | any | P1 ticket created in the ticketing system |
+| AUTO_REMEDIATE | 70 | IP blocked, credentials rotated, ticket opened |
+| INVESTIGATE | any | Event queued for analyst review |
+| IGNORE | any | Event dismissed as a confirmed false positive |
+
+### Phase 6: Notifications
+
+The notification worker consumes from `notifications.outbound` and delivers alerts through three channels simultaneously. It always prints a formatted alert block to its container logs. It stores a complete record in the PostgreSQL `notifications` table for dashboard queries and audit purposes. If the `SLACK_WEBHOOK_URL` environment variable is set, it also posts a rich Slack message for every HIGH or CRITICAL severity event.
 
 ---
 
-## 🧪 Running Tests
+## Running the Tests
+
+Each phase ships with a standalone test script. Run them in order after bringing the platform up.
 
 ```bash
-# Phase 3 — Kafka Pipeline (23 tests)
 bash scripts/test_phase3_pipeline.sh
-
-# Phase 4 — AI Engine (10 tests)
 bash scripts/test_phase4_ai.sh
-
-# Phase 5 — Auto-Remediation (10 tests)
 bash scripts/test_phase5_remediation.sh
-
-# Phase 6 — Notifications (8 tests)
 bash scripts/test_phase6_notifications.sh
 ```
 
-**Total: 51 automated tests — all passing ✅**
+Total coverage: 51 automated tests, all passing.
 
 ---
 
-## 📡 API Reference
+## Configuration Reference
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Service health check |
-| `GET` | `/api/v1/findings` | List all security findings |
-| `GET` | `/api/v1/findings/{id}` | Get specific finding |
-| `POST` | `/api/v1/events/simulate` | Inject a test security event |
-| `GET` | `/api/v1/stats` | Platform statistics |
+The `.env` file in the `sentinelops/` directory controls all runtime behaviour. The most important variables are listed below.
 
-Base URL: `http://localhost:8080`
+```
+POSTGRES_PASSWORD         Password for the PostgreSQL instance
+REDIS_PASSWORD            Password for the Redis instance
+
+NVIDIA_API_KEY            Your NVIDIA NIM API key
+NVIDIA_MODEL              Model name (moonshotai/kimi-k3)
+AI_TIMEOUT_SECONDS        Seconds to wait for AI response (default 120)
+AI_MAX_TOKENS             Maximum tokens in AI response (default 1000)
+
+BLOCK_IP_THRESHOLD        Minimum risk score required to block an IP (default 60)
+AUTO_REMEDIATE_THRESHOLD  Minimum risk score for full auto-remediation (default 70)
+
+SLACK_WEBHOOK_URL         Slack incoming webhook URL — leave empty to disable
+NOTIFICATION_TTL_DAYS     How long to retain notification records (default 30)
+```
+
+### Enabling Slack Notifications
+
+To enable Slack alerts, open `docker-compose.yml`, locate the `notification-worker` service, and set the `SLACK_WEBHOOK_URL` value. Then restart that single container.
+
+```bash
+docker compose up -d notification-worker
+```
+
+You can generate a free incoming webhook at [api.slack.com/apps](https://api.slack.com/apps) by creating a new app, enabling Incoming Webhooks, and copying the generated URL.
 
 ---
 
-## ⚙️ Configuration
+## Repository Layout
 
-Key environment variables in `.env`:
-
-```env
-# Database
-POSTGRES_PASSWORD=SentinelOps2024Secure
-REDIS_PASSWORD=SentinelRedis2024
-
-# AI Engine (NVIDIA NIM)
-NVIDIA_API_KEY=nvapi-your-key-here
-NVIDIA_MODEL=moonshotai/kimi-k3
-AI_TIMEOUT_SECONDS=120
-AI_MAX_TOKENS=1000
-
-# Remediation thresholds
-BLOCK_IP_THRESHOLD=60       # Min risk score to block an IP
-AUTO_REMEDIATE_THRESHOLD=70 # Min risk score to auto-remediate
-
-# Notifications (optional)
-SLACK_WEBHOOK_URL=          # Set to enable Slack alerts
+```
+SentiOps/
+  README.md
+  sentinelops/
+    docker-compose.yml
+    nginx/
+      nginx.conf
+    backend/
+      app/
+        main.py
+        models/
+        api/
+    workers/
+      Dockerfile
+      requirements.txt
+      common/
+        kafka_client.py
+        models.py
+      normalizer/
+      enrichment/
+      storage/
+      ai_worker/
+      remediation_worker/
+      notification_worker/
+    scripts/
+      test_phase3_pipeline.sh
+      test_phase4_ai.sh
+      test_phase5_remediation.sh
+      test_phase6_notifications.sh
 ```
 
 ---
 
-## 🔔 Enable Slack Notifications
+## Technology
 
-1. Go to [api.slack.com/apps](https://api.slack.com/apps)
-2. Create App → Incoming Webhooks → Activate
-3. Copy the webhook URL
-4. Set in `docker-compose.yml`:
-   ```yaml
-   notification-worker:
-     environment:
-       SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/YOUR/URL"
-   ```
-5. Restart: `docker compose up -d notification-worker`
-
----
-
-## 🖥️ Port Reference
-
-| Service | Host Port | Purpose |
-|---|---|---|
-| Nginx | `8080` | API gateway (use this) |
-| FastAPI | `8000` | Direct backend access |
-| PostgreSQL | `5433` | Database |
-| Redis | `6380` | Cache |
-| Kafka | `9092` | Event streaming |
-| Kafka UI | `8090` | Visual topic browser |
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
+| Component | Technology |
 |---|---|
 | API Gateway | Nginx |
 | Backend | FastAPI + Python 3.11 |
 | Database | PostgreSQL 15 + pgvector |
 | Cache | Redis 7 |
-| Streaming | Apache Kafka 7.6 (KRaft) |
+| Streaming | Apache Kafka 7.6 in KRaft mode |
 | AI | moonshotai/kimi-k3 via NVIDIA NIM |
-| Containers | Docker + Docker Compose v2 |
-| Workers | Python (structlog, psycopg2, confluent-kafka) |
+| Containers | Docker and Docker Compose v2 |
 
 ---
 
-## 📄 License
+## License
 
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-<div align="center">
-Built with ❤️ — AI-powered security for the modern SOC
-</div>
+MIT
