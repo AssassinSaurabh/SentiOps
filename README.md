@@ -1,6 +1,6 @@
 <img width="762" height="471" alt="Screenshot 2026-09-26 at 11 08 23 AM" src="https://github.com/user-attachments/assets/63e19719-3729-427b-955c-d2f1a5528e71" />
 
-# 🛡️ SentinelOps — AI-Powered Security Operations Platform
+# 🛡️ SentinelOps :  AI-Powered Security Operations Platform
 
 <div align="center">
 
