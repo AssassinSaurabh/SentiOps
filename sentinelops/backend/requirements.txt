@@ -1,0 +1,63 @@
+# ── Web Framework ──
+fastapi==0.109.0
+# The web framework itself
+
+uvicorn[standard]==0.27.0
+# ASGI server that runs FastAPI
+# [standard] includes: websockets, httptools (faster HTTP parsing)
+
+# ── Database ──
+sqlalchemy==2.0.25
+# ORM (Object-Relational Mapper): write Python, it generates SQL
+# Instead of: SELECT * FROM findings WHERE severity='CRITICAL'
+# You write: session.query(Finding).filter(Finding.severity == 'CRITICAL')
+
+asyncpg==0.29.0
+# Async PostgreSQL driver. Fast. Works with FastAPI's async nature.
+
+pgvector==0.2.5
+# pgvector Python client: lets SQLAlchemy use vector columns
+
+alembic==1.13.1
+# Database migration tool. Manage schema changes over time.
+# Like Git for your database schema.
+
+# ── Cache ──
+redis==5.0.1
+# Python Redis client
+
+# ── Environment & Config ──
+pydantic-settings==2.1.0
+# Load and validate .env variables into Python objects
+# Pydantic validates types: if PORT should be int, it fails on "abc"
+
+python-dotenv==1.0.0
+# Load .env file into environment variables
+
+# ── HTTP Client ──
+httpx==0.26.0
+# Async HTTP client (for calling external APIs like threat intel)
+
+# ── Kafka ──
+confluent-kafka==2.3.0
+# Kafka client: FastAPI uses this to produce events to the pipeline
+
+# ── Utilities ──
+python-multipart==0.0.6
+# Required for file uploads in FastAPI
+
+
+structlog==24.1.0
+# Structured logging: logs as JSON (easier to parse in OpenSearch)
+
+# ── Security ──
+passlib[bcrypt]==1.7.4
+# Password hashing (for user authentication)
+
+python-jose[cryptography]==3.3.0
+# JWT token creation and validation
+
+# ── Testing ──
+pytest==7.4.4
+pytest-asyncio==0.23.3
+httpx==0.26.0

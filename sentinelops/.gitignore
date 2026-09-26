@@ -1,0 +1,8 @@
+# NEVER commit these
+.env
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.DS_Store
+*.log

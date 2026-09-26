@@ -1,0 +1,440 @@
+# ─────────────────────────────────────────────────────────────
+# SentinelOps Docker Compose — Development Stack
+# ─────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# Services = the containers we want to run
+# ─────────────────────────────────────────────────────────────
+services:
+
+  # ═══════════════════════════════════
+  # SERVICE 1: PostgreSQL Database
+  # ═══════════════════════════════════
+  postgres:
+    # image: the pre-built image to use (downloaded from Docker Hub)
+    # postgres:16 = PostgreSQL version 16
+    # alpine = smaller base image (Alpine Linux, ~5MB vs Ubuntu's ~80MB)
+    image: pgvector/pgvector:pg16
+
+    # container_name: give it a readable name (instead of random hash)
+    container_name: sentinelops-postgres
+
+    # restart: what to do if the container crashes
+    # unless-stopped = restart automatically UNLESS we manually stop it
+    # This ensures the DB comes back up after a server reboot
+    restart: unless-stopped
+
+    # env_file: load environment variables from this file
+    env_file:
+      - .env
+
+    # environment: override or add specific env variables
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      # ${POSTGRES_USER} means: read POSTGRES_USER from .env file
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+    # volumes: persistent storage
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # postgres_data = named volume (Docker manages it)
+      # /var/lib/postgresql/data = where PostgreSQL stores its data files
+      # Without this: data is LOST when container restarts
+      
+      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+      # ./backend/init.sql = file on YOUR Mac
+      # /docker-entrypoint-initdb.d/ = special folder in postgres container
+      # Any .sql file placed here runs AUTOMATICALLY on first startup
+      # We use this to create our tables
+
+    # ports: map container port to your Mac port
+    ports:
+      - "5433:5432"
+      # 5433 on your Mac → 5432 inside container
+      # We use 5433 because Mac has native PostgreSQL on 5432
+
+    # networks: which Docker network this container joins
+    networks:
+      - sentinelops-network
+
+    # healthcheck: Docker regularly tests if this service is healthy
+    healthcheck:
+      # pg_isready = PostgreSQL's built-in health check tool
+      # -U = username to connect with
+      # -d = database to check
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s    # Check every 10 seconds
+      timeout: 5s      # If no response in 5s, mark as unhealthy
+      retries: 5       # Try 5 times before giving up
+      start_period: 30s # Give 30s for first startup (DB takes time to initialize)
+
+  # ═══════════════════════════════════
+  # SERVICE 2: Redis Cache
+  # ═══════════════════════════════════
+  redis:
+    image: redis:7.2-alpine
+    # redis:7.2 = Redis version 7.2 (latest stable)
+    # alpine = small base image
+
+    container_name: sentinelops-redis
+
+    restart: unless-stopped
+
+    # command: override the default startup command
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-SentinelRedis2024}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+      --loglevel notice
+    # redis-server     = start the Redis server
+    # --requirepass    = require a password to connect
+    # --maxmemory 256mb = never use more than 256MB RAM
+    # --maxmemory-policy allkeys-lru = when full, delete least-recently-used keys
+    # --save 60 1      = save to disk every 60 seconds if at least 1 key changed
+    #                    (persistence: data survives restart)
+    # --loglevel notice = log important events (not too verbose)
+
+    volumes:
+      - redis_data:/data
+      # /data = where Redis saves its snapshot files
+
+    ports:
+      - "6380:6379"
+      # 6380 on your Mac → 6379 inside container
+      # We use 6380 because Mac has native Redis on 6379
+
+    networks:
+      - sentinelops-network
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-SentinelRedis2024}", "ping"]
+      # redis-cli ping = Redis responds with "PONG" if healthy
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ═══════════════════════════════════
+  # SERVICE 3: FastAPI Backend
+  # ═══════════════════════════════════
+  fastapi:
+    # build: instead of a pre-built image, BUILD from our Dockerfile
+    build:
+      context: ./backend     # Look for Dockerfile in ./backend folder
+      dockerfile: Dockerfile # Use this specific Dockerfile
+
+    container_name: sentinelops-fastapi
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    ports:
+      - "8000:8000"
+      # We expose 8000 for direct debugging
+      # In production: only Nginx should talk to FastAPI (remove this)
+
+    networks:
+      - sentinelops-network
+
+    # depends_on: start these services BEFORE starting FastAPI
+    depends_on:
+      postgres:
+        condition: service_healthy   # Wait until postgres passes its healthcheck
+      redis:
+        condition: service_healthy   # Wait until redis passes its healthcheck
+    # Why? FastAPI will crash on startup if DB/Redis isn't ready
+
+    # volumes for development: mount your local code into the container
+    volumes:
+      - ./backend:/app
+      # ./backend = your code on Mac
+      # /app = where code lives inside container
+      # Effect: you edit code on Mac → container sees changes instantly
+      # This is called a "bind mount" (different from named volume)
+
+    # command: how to start FastAPI with hot-reload for development
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+      --log-level info
+    # uvicorn        = ASGI server (runs FastAPI apps)
+    # app.main:app   = Python module path: file=app/main.py, variable=app
+    # --host 0.0.0.0 = accept connections from everywhere (Docker network)
+    # --port 8000    = listen on port 8000
+    # --reload       = restart automatically when you change code (dev only!)
+    # --log-level info = show info, warning, error logs
+
+  # ═══════════════════════════════════
+  # SERVICE 4: Nginx Reverse Proxy
+  # ═══════════════════════════════════
+  nginx:
+    image: nginx:1.25-alpine
+
+    container_name: sentinelops-nginx
+
+    restart: unless-stopped
+
+    ports:
+      - "8080:80"   # HTTP: http://localhost:8080
+      - "8443:443"  # HTTPS (future SSL)
+
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+
+    networks:
+      - sentinelops-network
+
+    depends_on:
+      - fastapi    # Start FastAPI before Nginx
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ═══════════════════════════════════
+  # SERVICE 5: Apache Kafka (KRaft mode, Confluent Platform)
+  # Production-grade Kafka image running in KRaft mode
+  # No Zookeeper needed — Kafka manages its own metadata
+  # ═══════════════════════════════════
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: sentinelops-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode settings
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      CLUSTER_ID: '4L622nShT-eMCtK--X86sw'
+
+      # Listeners
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+
+      # Topic defaults
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+
+      # Single-broker ISR settings
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+      # Storage & Retention
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+
+      # JVM Memory limits (Mac M4 optimized)
+      KAFKA_HEAP_OPTS: '-Xmx512m -Xms256m'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+      - ./scripts:/scripts
+    networks:
+      - sentinelops-network
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ═══════════════════════════════════
+  # SERVICE 6: Kafka UI (Browser Management)
+  # Access at: http://localhost:8090
+  # ═══════════════════════════════════
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: sentinelops-kafka-ui
+    restart: unless-stopped
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: sentinelops
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ═══════════════════════════════════
+  # SERVICE 7: Normalizer Worker
+  # Reads raw events → produces structured JSON
+  # ═══════════════════════════════════
+  normalizer:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: sentinelops-normalizer
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WORKER_NAME: normalizer
+    command: ["python", "-u", "normalizer/main.py"]
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ═══════════════════════════════════
+  # SERVICE 8: Enrichment Worker
+  # Reads normalized events → adds IP geo, threat intel
+  # ═══════════════════════════════════
+  enrichment:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: sentinelops-enrichment
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WORKER_NAME: enrichment
+    command: ["python", "-u", "enrichment/main.py"]
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ═══════════════════════════════════
+  # SERVICE 9: Storage Worker
+  # Reads enriched events → dedup check → PostgreSQL
+  # ═══════════════════════════════════
+  storage:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: sentinelops-storage
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WORKER_NAME: storage
+    command: ["python", "-u", "storage/main.py"]
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════
+  # SERVICE 10: AI Analysis Worker (Phase 4)
+  # Reads enriched events → calls NVIDIA NIM LLM → stores AI verdict
+  # NVIDIA NIM is OpenAI-compatible (meta/llama-3.1-8b-instruct)
+  # ═══════════════════════════════════════════════════════
+  ai-worker:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: sentinelops-ai-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WORKER_NAME: ai_worker
+      AI_PROVIDER: nvidia
+      NVIDIA_MODEL: moonshotai/kimi-k3
+    command: ["python", "-u", "ai_worker/main.py"]
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════
+  # SERVICE 11: Auto-Remediation Worker (Phase 5)
+  # Reads AI decisions → executes playbooks → marks findings remediated
+  # Playbooks: BLOCK_IP, ESCALATE, AUTO_REMEDIATE, INVESTIGATE, IGNORE
+  # ═══════════════════════════════════════════════════════
+  remediation-worker:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: sentinelops-remediation-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WORKER_NAME: remediation_worker
+      AUTO_REMEDIATE_THRESHOLD: "70"
+      BLOCK_IP_THRESHOLD: "60"
+    command: ["python", "-u", "remediation_worker/main.py"]
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════
+  # SERVICE 12: Notification Worker (Phase 6)
+  # Reads notifications.outbound → console alert + Slack + PostgreSQL history
+  # Set SLACK_WEBHOOK_URL env var to enable Slack (optional)
+  # ═══════════════════════════════════════════════════════
+  notification-worker:
+    build:
+      context: ./workers
+      dockerfile: Dockerfile
+    container_name: sentinelops-notification-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      WORKER_NAME: notification_worker
+      SLACK_WEBHOOK_URL: ""       # Set this to enable Slack alerts
+      NOTIFICATION_TTL_DAYS: "30"
+    command: ["python", "-u", "notification_worker/main.py"]
+    networks:
+      - sentinelops-network
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+# ─────────────────────────────────────────────────────────────
+# Named Volumes (Docker manages these)
+# ─────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  kafka_data:
+    driver: local
+
+# ─────────────────────────────────────────────────────────────
+# Networks (private network only our containers can use)
+# ─────────────────────────────────────────────────────────────
+networks:
+  sentinelops-network:
+    driver: bridge
+    # All containers in this network can talk to each other by service name
+    # Normalizer reaches Kafka at hostname "kafka" (not localhost)
