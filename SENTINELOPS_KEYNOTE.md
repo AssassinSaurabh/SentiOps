@@ -1,12 +1,12 @@
 # The AI Security Factory: SentinelOps Keynote
 
-*A keynote presentation on autonomous cybersecurity, real-time streaming, and deep reasoning AI, presented in the vision, cadence, and storytelling style of Jensen Huang.*
+*A keynote presentation on autonomous cybersecurity, real-time streaming, and deep reasoning AI.*
 
 ---
 
 ## Act 1: The World Has Changed
 
-Good morning. Welcome. It is wonderful to see all of you here today.
+Welcome. It is wonderful to see all of you here today.
 
 Look around. We are standing at the beginning of an entirely new era of computing. 
 
